@@ -100,13 +100,15 @@ namespace GaussianSplatting.Runtime
             public ushort shPadding; // pad to multiple of 4 bytes
         }
 
-        public void Initialize(int splats, VectorFormat formatPos, VectorFormat formatScale, ColorFormat formatColor, SHFormat formatSh, Vector3 bMin, Vector3 bMax, CameraInfo[] cameraInfos)
+        public void Initialize(int splats, VectorFormat formatPos, VectorFormat formatNormal, VectorFormat formatScale, ColorFormat formatColor, ColorFormat formatSpecular , SHFormat formatSh, Vector3 bMin, Vector3 bMax, CameraInfo[] cameraInfos)
         {
             m_SplatCount = splats;
             m_FormatVersion = kCurrentVersion;
             m_PosFormat = formatPos;
+            m_NormalFormat = formatNormal;
             m_ScaleFormat = formatScale;
             m_ColorFormat = formatColor;
+            m_SpecularFormat = formatSpecular;
             m_SHFormat = formatSh;
             m_Cameras = cameraInfos;
             m_BoundsMin = bMin;
@@ -118,18 +120,19 @@ namespace GaussianSplatting.Runtime
             m_DataHash = hash;
         }
 
-        public void SetAssetFiles(TextAsset dataChunk, TextAsset dataPos, TextAsset dataOther, TextAsset dataColor, TextAsset dataSh)
+        public void SetAssetFiles(TextAsset dataChunk, TextAsset dataPos, TextAsset dataOther, TextAsset dataColor, TextAsset dataSpecular, TextAsset dataSh)
         {
             m_ChunkData = dataChunk;
             m_PosData = dataPos;
             m_OtherData = dataOther;
             m_ColorData = dataColor;
+            m_SpecularData = dataSpecular;
             m_SHData = dataSh;
         }
 
-        public static int GetOtherSizeNoSHIndex(VectorFormat scaleFormat)
+        public static int GetOtherSizeNoSHIndex(VectorFormat normalFormat, VectorFormat scaleFormat)
         {
-            return 4 + GetVectorSize(scaleFormat);
+            return 4 + 2 * GetVectorSize(normalFormat) + GetVectorSize(scaleFormat);
         }
 
         public static int GetSHCount(SHFormat fmt, int splatCount)
@@ -175,14 +178,19 @@ namespace GaussianSplatting.Runtime
         {
             return splatCount * GetVectorSize(formatPos);
         }
-        public static long CalcOtherDataSize(int splatCount, VectorFormat formatScale)
+        public static long CalcOtherDataSize(int splatCount, VectorFormat formatNormal, VectorFormat formatScale)
         {
-            return splatCount * GetOtherSizeNoSHIndex(formatScale);
+            return splatCount * GetOtherSizeNoSHIndex(formatNormal, formatScale);
         }
         public static long CalcColorDataSize(int splatCount, ColorFormat formatColor)
         {
             var (width, height) = CalcTextureSize(splatCount);
             return width * height * GetColorSize(formatColor);
+        }
+        public static long CalcSpecularDataSize(int splatCount, ColorFormat formatSpecular)
+        {
+            var (width, height) = CalcTextureSize(splatCount);
+            return width * height * GetColorSize(formatSpecular);
         }
         public static long CalcSHDataSize(int splatCount, SHFormat formatSh)
         {
@@ -203,12 +211,15 @@ namespace GaussianSplatting.Runtime
         }
 
         [SerializeField] VectorFormat m_PosFormat = VectorFormat.Norm11;
+        [SerializeField] VectorFormat m_NormalFormat = VectorFormat.Norm11;
         [SerializeField] VectorFormat m_ScaleFormat = VectorFormat.Norm11;
         [SerializeField] SHFormat m_SHFormat = SHFormat.Norm11;
         [SerializeField] ColorFormat m_ColorFormat;
+        [SerializeField] ColorFormat m_SpecularFormat;
 
         [SerializeField] TextAsset m_PosData;
         [SerializeField] TextAsset m_ColorData;
+        [SerializeField] TextAsset m_SpecularData;
         [SerializeField] TextAsset m_OtherData;
         [SerializeField] TextAsset m_SHData;
         // Chunk data is optional (if data formats are fully lossless then there's no chunking)
@@ -217,12 +228,15 @@ namespace GaussianSplatting.Runtime
         [SerializeField] CameraInfo[] m_Cameras;
 
         public VectorFormat posFormat => m_PosFormat;
+        public VectorFormat normalFormat => m_NormalFormat;
         public VectorFormat scaleFormat => m_ScaleFormat;
         public SHFormat shFormat => m_SHFormat;
         public ColorFormat colorFormat => m_ColorFormat;
+        public ColorFormat specularFormat => m_SpecularFormat;
 
         public TextAsset posData => m_PosData;
         public TextAsset colorData => m_ColorData;
+        public TextAsset specularData => m_SpecularData;
         public TextAsset otherData => m_OtherData;
         public TextAsset shData => m_SHData;
         public TextAsset chunkData => m_ChunkData;
@@ -231,7 +245,10 @@ namespace GaussianSplatting.Runtime
         public struct ChunkInfo
         {
             public uint colR, colG, colB, colA;
+            public uint specR, specG, specB, specA;
             public float2 posX, posY, posZ;
+            public uint nor1X, nor1Y, nor1Z;
+            public uint nor2X, nor2Y, nor2Z;
             public uint sclX, sclY, sclZ;
             public uint shR, shG, shB;
         }

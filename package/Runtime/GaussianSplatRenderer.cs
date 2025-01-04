@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
@@ -214,7 +215,25 @@ namespace GaussianSplatting.Runtime
             DebugChunkBounds,
         }
         public GaussianSplatAsset m_Asset;
-
+        static Cubemap s_BlackTexture;
+        static Cubemap GetBlackTexture()
+        {
+            if (s_BlackTexture == null)
+            {
+                s_BlackTexture = new Cubemap(1, TextureFormat.RGBA32, false);
+                for (int i = 0; i < 6; ++i)
+                    s_BlackTexture.SetPixel((CubemapFace)i, 0, 0, Color.black);
+                s_BlackTexture.Apply(false, true);
+                s_BlackTexture.name = "DefaultBlackTexture";
+            }
+            return s_BlackTexture;
+        }
+        public Material m_EnvironmentMap;
+        int m_MaxMipLevel;
+        Cubemap GetCubemap => m_EnvironmentMap ? m_EnvironmentMap.GetTexture("_Tex") as Cubemap : GetBlackTexture();
+        int GetMaxMipLevel => GetCubemap.mipmapCount - 1;
+        Texture2D m_FGLUT;
+        readonly string kFGLutPath = "../../package/Materials/bsdf_256_256.bin";
         [Range(0.1f, 2.0f)] [Tooltip("Additional scaling factor for the splats")]
         public float m_SplatScale = 1.0f;
         [Range(0.05f, 20.0f)]
@@ -246,6 +265,7 @@ namespace GaussianSplatting.Runtime
         GraphicsBuffer m_GpuOtherData;
         GraphicsBuffer m_GpuSHData;
         Texture m_GpuColorData;
+        Texture m_GpuSpecularData;
         internal GraphicsBuffer m_GpuChunks;
         internal bool m_GpuChunksValid;
         internal GraphicsBuffer m_GpuView;
@@ -276,10 +296,14 @@ namespace GaussianSplatting.Runtime
 
         internal static class Props
         {
+            public static readonly int EnvMap = Shader.PropertyToID("_EnvMap");
+            public static readonly int MaxMipLevel = Shader.PropertyToID("_MaxMipLevel");
+            public static readonly int FGLUT = Shader.PropertyToID("_FGLUT");
             public static readonly int SplatPos = Shader.PropertyToID("_SplatPos");
             public static readonly int SplatOther = Shader.PropertyToID("_SplatOther");
             public static readonly int SplatSH = Shader.PropertyToID("_SplatSH");
             public static readonly int SplatColor = Shader.PropertyToID("_SplatColor");
+            public static readonly int SplatSpecular = Shader.PropertyToID("_SplatSpecular");
             public static readonly int SplatSelectedBits = Shader.PropertyToID("_SplatSelectedBits");
             public static readonly int SplatDeletedBits = Shader.PropertyToID("_SplatDeletedBits");
             public static readonly int SplatBitsValid = Shader.PropertyToID("_SplatBitsValid");
@@ -352,10 +376,11 @@ namespace GaussianSplatting.Runtime
             m_Asset.posData != null &&
             m_Asset.otherData != null &&
             m_Asset.shData != null &&
-            m_Asset.colorData != null;
+            m_Asset.colorData != null &&
+            m_Asset.specularData != null;
         public bool HasValidRenderSetup => m_GpuPosData != null && m_GpuOtherData != null && m_GpuChunks != null;
 
-        const int kGpuViewDataSize = 40;
+        const int kGpuViewDataSize = 72;
 
         void CreateResourcesForAsset()
         {
@@ -370,11 +395,16 @@ namespace GaussianSplatting.Runtime
             m_GpuSHData = new GraphicsBuffer(GraphicsBuffer.Target.Raw, (int) (asset.shData.dataSize / 4), 4) { name = "GaussianSHData" };
             m_GpuSHData.SetData(asset.shData.GetData<uint>());
             var (texWidth, texHeight) = GaussianSplatAsset.CalcTextureSize(asset.splatCount);
-            var texFormat = GaussianSplatAsset.ColorFormatToGraphics(asset.colorFormat);
-            var tex = new Texture2D(texWidth, texHeight, texFormat, TextureCreationFlags.DontInitializePixels | TextureCreationFlags.IgnoreMipmapLimit | TextureCreationFlags.DontUploadUponCreate) { name = "GaussianColorData" };
-            tex.SetPixelData(asset.colorData.GetData<byte>(), 0);
-            tex.Apply(false, true);
-            m_GpuColorData = tex;
+            var colorTexFormat = GaussianSplatAsset.ColorFormatToGraphics(asset.colorFormat);
+            var colorTex = new Texture2D(texWidth, texHeight, colorTexFormat, TextureCreationFlags.DontInitializePixels | TextureCreationFlags.IgnoreMipmapLimit | TextureCreationFlags.DontUploadUponCreate) { name = "GaussianColorData" };
+            colorTex.SetPixelData(asset.colorData.GetData<byte>(), 0);
+            colorTex.Apply(false, true);
+            m_GpuColorData = colorTex;
+            var specTexFormat = GaussianSplatAsset.ColorFormatToGraphics(asset.specularFormat);
+            var specularTex = new Texture2D(texWidth, texHeight, specTexFormat, TextureCreationFlags.DontInitializePixels | TextureCreationFlags.IgnoreMipmapLimit | TextureCreationFlags.DontUploadUponCreate) { name = "GaussianSpecularData" };
+            specularTex.SetPixelData(asset.specularData.GetData<byte>(), 0);
+            specularTex.Apply(false, true);
+            m_GpuSpecularData = specularTex;
             if (asset.chunkData != null && asset.chunkData.dataSize != 0)
             {
                 m_GpuChunks = new GraphicsBuffer(GraphicsBuffer.Target.Structured,
@@ -446,6 +476,38 @@ namespace GaussianSplatting.Runtime
             GaussianSplatRenderSystem.instance.RegisterSplat(this);
 
             CreateResourcesForAsset();
+            LoadFGLUTFromFile();
+        }
+
+        void LoadFGLUTFromFile()
+        {
+            if (!File.Exists(kFGLutPath))
+            {
+                Debug.LogError($"FGLUT file not found at {kFGLutPath}");
+                return;
+            }
+            byte[] rawData = File.ReadAllBytes(kFGLutPath);
+            // 256x256x2 float32
+            int floatCount = rawData.Length / 4;
+            int width = 256;
+            int height = 256;
+            int expectedSize = width * height * 2 * sizeof(float);
+            if (rawData.Length != expectedSize)
+            {
+                Debug.LogError($"FGLUT file {kFGLutPath} has unexpected size {rawData.Length}, expected {expectedSize}");
+                return;
+            }
+
+             m_FGLUT = new Texture2D(width, height, TextureFormat.RGFloat, false, true)
+            {
+                name = "FGLUT",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear
+            };
+            m_FGLUT.LoadRawTextureData(rawData);
+            m_FGLUT.Apply(false, true);
+
+            // Debug.Log($"FGLUT loaded: {kFGLutPath}, total floats={floatCount}");
         }
 
         void SetAssetDataOnCS(CommandBuffer cmb, KernelIndices kernel)
@@ -457,13 +519,14 @@ namespace GaussianSplatting.Runtime
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatOther, m_GpuOtherData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatSH, m_GpuSHData);
             cmb.SetComputeTextureParam(cs, kernelIndex, Props.SplatColor, m_GpuColorData);
+            cmb.SetComputeTextureParam(cs, kernelIndex, Props.SplatSpecular, m_GpuSpecularData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatSelectedBits, m_GpuEditSelected ?? m_GpuPosData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatDeletedBits, m_GpuEditDeleted ?? m_GpuPosData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatViewData, m_GpuView);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.OrderBuffer, m_GpuSortKeys);
 
             cmb.SetComputeIntParam(cs, Props.SplatBitsValid, m_GpuEditSelected != null && m_GpuEditDeleted != null ? 1 : 0);
-            uint format = (uint)m_Asset.posFormat | ((uint)m_Asset.scaleFormat << 8) | ((uint)m_Asset.shFormat << 16);
+            uint format = (uint)m_Asset.posFormat | ((uint)m_Asset.normalFormat << 8) | ((uint)m_Asset.scaleFormat << 16) | ((uint)m_Asset.shFormat << 24);
             cmb.SetComputeIntParam(cs, Props.SplatFormat, (int)format);
             cmb.SetComputeIntParam(cs, Props.SplatCount, m_SplatCount);
             cmb.SetComputeIntParam(cs, Props.SplatChunkCount, m_GpuChunksValid ? m_GpuChunks.count : 0);
@@ -475,14 +538,18 @@ namespace GaussianSplatting.Runtime
 
         internal void SetAssetDataOnMaterial(MaterialPropertyBlock mat)
         {
+            mat.SetTexture(Props.EnvMap, GetCubemap);
+            mat.SetInt(Props.MaxMipLevel, GetMaxMipLevel);
+            mat.SetTexture(Props.FGLUT, m_FGLUT);
             mat.SetBuffer(Props.SplatPos, m_GpuPosData);
             mat.SetBuffer(Props.SplatOther, m_GpuOtherData);
             mat.SetBuffer(Props.SplatSH, m_GpuSHData);
             mat.SetTexture(Props.SplatColor, m_GpuColorData);
+            mat.SetTexture(Props.SplatSpecular, m_GpuSpecularData);
             mat.SetBuffer(Props.SplatSelectedBits, m_GpuEditSelected ?? m_GpuPosData);
             mat.SetBuffer(Props.SplatDeletedBits, m_GpuEditDeleted ?? m_GpuPosData);
             mat.SetInt(Props.SplatBitsValid, m_GpuEditSelected != null && m_GpuEditDeleted != null ? 1 : 0);
-            uint format = (uint)m_Asset.posFormat | ((uint)m_Asset.scaleFormat << 8) | ((uint)m_Asset.shFormat << 16);
+            uint format = (uint)m_Asset.posFormat | ((uint)m_Asset.normalFormat << 8) | ((uint)m_Asset.scaleFormat << 16) | ((uint)m_Asset.shFormat << 24);
             mat.SetInteger(Props.SplatFormat, (int)format);
             mat.SetInteger(Props.SplatCount, m_SplatCount);
             mat.SetInteger(Props.SplatChunkCount, m_GpuChunksValid ? m_GpuChunks.count : 0);
@@ -497,6 +564,7 @@ namespace GaussianSplatting.Runtime
         void DisposeResourcesForAsset()
         {
             DestroyImmediate(m_GpuColorData);
+            DestroyImmediate(m_GpuSpecularData);
 
             DisposeBuffer(ref m_GpuPosData);
             DisposeBuffer(ref m_GpuOtherData);
@@ -940,9 +1008,12 @@ namespace GaussianSplatting.Runtime
 
             // new texture is a RenderTexture so we can write to it from a compute shader
             var (texWidth, texHeight) = GaussianSplatAsset.CalcTextureSize(newSplatCount);
-            var texFormat = GaussianSplatAsset.ColorFormatToGraphics(asset.colorFormat);
-            var newColorData = new RenderTexture(texWidth, texHeight, texFormat, GraphicsFormat.None) { name = "GaussianColorData", enableRandomWrite = true };
+            var colorTexFormat = GaussianSplatAsset.ColorFormatToGraphics(asset.colorFormat);
+            var newColorData = new RenderTexture(texWidth, texHeight, colorTexFormat, GraphicsFormat.None) { name = "GaussianColorData", enableRandomWrite = true };
             newColorData.Create();
+            var specularTexFormat = GaussianSplatAsset.ColorFormatToGraphics(asset.specularFormat);
+            var newSpecularData = new RenderTexture(texWidth, texHeight, specularTexFormat, GraphicsFormat.None) { name = "GaussianSpecularData", enableRandomWrite = true };
+            newSpecularData.Create();
 
             // selected/deleted buffers
             var selTarget = GraphicsBuffer.Target.Raw | GraphicsBuffer.Target.CopySource | GraphicsBuffer.Target.CopyDestination;
@@ -958,13 +1029,14 @@ namespace GaussianSplatting.Runtime
             InitSortBuffers(newSplatCount);
 
             // copy existing data over into new buffers
-            EditCopySplats(transform, newPosData, newOtherData, newSHData, newColorData, newEditDeleted, newSplatCount, 0, 0, m_SplatCount);
+            EditCopySplats(transform, newPosData, newOtherData, newSHData, newColorData, newSpecularData, newEditDeleted, newSplatCount, 0, 0, m_SplatCount);
 
             // use the new buffers and the new splat count
             m_GpuPosData.Dispose();
             m_GpuOtherData.Dispose();
             m_GpuSHData.Dispose();
             DestroyImmediate(m_GpuColorData);
+            DestroyImmediate(m_GpuSpecularData);
             m_GpuView.Dispose();
 
             m_GpuEditSelected?.Dispose();
@@ -975,6 +1047,7 @@ namespace GaussianSplatting.Runtime
             m_GpuOtherData = newOtherData;
             m_GpuSHData = newSHData;
             m_GpuColorData = newColorData;
+            m_GpuSpecularData = newSpecularData;
             m_GpuView = newGpuView;
             m_GpuEditSelected = newEditSelected;
             m_GpuEditSelectedMouseDown = newEditSelectedMouseDown;
@@ -991,7 +1064,7 @@ namespace GaussianSplatting.Runtime
         {
             EditCopySplats(
                 dst.transform,
-                dst.m_GpuPosData, dst.m_GpuOtherData, dst.m_GpuSHData, dst.m_GpuColorData, dst.m_GpuEditDeleted,
+                dst.m_GpuPosData, dst.m_GpuOtherData, dst.m_GpuSHData, dst.m_GpuColorData, dst.m_GpuSpecularData, dst.m_GpuEditDeleted,
                 dst.splatCount,
                 copySrcStartIndex, copyDstStartIndex, copyCount);
             dst.editModified = true;
@@ -999,7 +1072,7 @@ namespace GaussianSplatting.Runtime
 
         public void EditCopySplats(
             Transform dstTransform,
-            GraphicsBuffer dstPos, GraphicsBuffer dstOther, GraphicsBuffer dstSH, Texture dstColor,
+            GraphicsBuffer dstPos, GraphicsBuffer dstOther, GraphicsBuffer dstSH, Texture dstColor, Texture dstSpecular,
             GraphicsBuffer dstEditDeleted,
             int dstSize,
             int copySrcStartIndex, int copyDstStartIndex, int copyCount)
@@ -1017,6 +1090,7 @@ namespace GaussianSplatting.Runtime
             cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CopySplats, "_CopyDstOther", dstOther);
             cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CopySplats, "_CopyDstSH", dstSH);
             cmb.SetComputeTextureParam(m_CSSplatUtilities, (int)KernelIndices.CopySplats, "_CopyDstColor", dstColor);
+            cmb.SetComputeTextureParam(m_CSSplatUtilities, (int)KernelIndices.CopySplats, "_CopyDstSpecular", dstSpecular);
             cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CopySplats, "_CopyDstEditDeleted", dstEditDeleted);
 
             cmb.SetComputeIntParam(m_CSSplatUtilities, "_CopyDstSize", dstSize);

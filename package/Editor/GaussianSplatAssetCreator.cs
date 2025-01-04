@@ -42,8 +42,10 @@ namespace GaussianSplatting.Editor
         [SerializeField] string m_OutputFolder = "Assets/GaussianAssets";
         [SerializeField] DataQuality m_Quality = DataQuality.Medium;
         [SerializeField] GaussianSplatAsset.VectorFormat m_FormatPos;
+        [SerializeField] GaussianSplatAsset.VectorFormat m_FormatNormal;
         [SerializeField] GaussianSplatAsset.VectorFormat m_FormatScale;
         [SerializeField] GaussianSplatAsset.ColorFormat m_FormatColor;
+        [SerializeField] GaussianSplatAsset.ColorFormat m_FormatSpecular;
         [SerializeField] GaussianSplatAsset.SHFormat m_FormatSH;
 
         string m_ErrorMessage;
@@ -53,8 +55,10 @@ namespace GaussianSplatting.Editor
 
         bool isUsingChunks =>
             m_FormatPos != GaussianSplatAsset.VectorFormat.Float32 ||
+            m_FormatNormal != GaussianSplatAsset.VectorFormat.Float32 ||
             m_FormatScale != GaussianSplatAsset.VectorFormat.Float32 ||
             m_FormatColor != GaussianSplatAsset.ColorFormat.Float32x4 ||
+            m_FormatSpecular != GaussianSplatAsset.ColorFormat.Float32x4 ||
             m_FormatSH != GaussianSplatAsset.SHFormat.Float32;
 
         [MenuItem("Tools/Gaussian Splats/Create GaussianSplatAsset")]
@@ -115,15 +119,16 @@ namespace GaussianSplatting.Editor
                 ApplyQualityLevel();
             }
 
-            long sizePos = 0, sizeOther = 0, sizeCol = 0, sizeSHs = 0, totalSize = 0;
+            long sizePos = 0, sizeOther = 0, sizeCol = 0, sizeSpec = 0, sizeSHs = 0, totalSize = 0;
             if (m_PrevVertexCount > 0)
             {
                 sizePos = GaussianSplatAsset.CalcPosDataSize(m_PrevVertexCount, m_FormatPos);
-                sizeOther = GaussianSplatAsset.CalcOtherDataSize(m_PrevVertexCount, m_FormatScale);
+                sizeOther = GaussianSplatAsset.CalcOtherDataSize(m_PrevVertexCount, m_FormatNormal, m_FormatScale);
                 sizeCol = GaussianSplatAsset.CalcColorDataSize(m_PrevVertexCount, m_FormatColor);
+                sizeSpec = GaussianSplatAsset.CalcSpecularDataSize(m_PrevVertexCount, m_FormatSpecular);
                 sizeSHs = GaussianSplatAsset.CalcSHDataSize(m_PrevVertexCount, m_FormatSH);
                 long sizeChunk = isUsingChunks ? GaussianSplatAsset.CalcChunkDataSize(m_PrevVertexCount) : 0;
-                totalSize = sizePos + sizeOther + sizeCol + sizeSHs + sizeChunk;
+                totalSize = sizePos + sizeOther + sizeCol + sizeSpec + sizeSHs + sizeChunk;
             }
 
             const float kSizeColWidth = 70;
@@ -134,12 +139,20 @@ namespace GaussianSplatting.Editor
             GUILayout.Label(sizePos > 0 ? EditorUtility.FormatBytes(sizePos) : string.Empty, GUILayout.Width(kSizeColWidth));
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
+            m_FormatNormal = (GaussianSplatAsset.VectorFormat)EditorGUILayout.EnumPopup("Normal", m_FormatNormal);
+            GUILayout.Label(sizeOther > 0 ? EditorUtility.FormatBytes(sizeOther) : string.Empty, GUILayout.Width(kSizeColWidth));
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
             m_FormatScale = (GaussianSplatAsset.VectorFormat)EditorGUILayout.EnumPopup("Scale", m_FormatScale);
             GUILayout.Label(sizeOther > 0 ? EditorUtility.FormatBytes(sizeOther) : string.Empty, GUILayout.Width(kSizeColWidth));
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             m_FormatColor = (GaussianSplatAsset.ColorFormat)EditorGUILayout.EnumPopup("Color", m_FormatColor);
             GUILayout.Label(sizeCol > 0 ? EditorUtility.FormatBytes(sizeCol) : string.Empty, GUILayout.Width(kSizeColWidth));
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            m_FormatSpecular = (GaussianSplatAsset.ColorFormat)EditorGUILayout.EnumPopup("Specular", m_FormatSpecular);
+            GUILayout.Label(sizeSpec > 0 ? EditorUtility.FormatBytes(sizeSpec) : string.Empty, GUILayout.Width(kSizeColWidth));
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             m_FormatSH = (GaussianSplatAsset.SHFormat) EditorGUILayout.EnumPopup("SH", m_FormatSH);
@@ -184,32 +197,42 @@ namespace GaussianSplatting.Editor
                     break;
                 case DataQuality.VeryLow: // 18.62x smaller, 32.27 PSNR
                     m_FormatPos = GaussianSplatAsset.VectorFormat.Norm11;
+                    m_FormatNormal = GaussianSplatAsset.VectorFormat.Norm6;
                     m_FormatScale = GaussianSplatAsset.VectorFormat.Norm6;
                     m_FormatColor = GaussianSplatAsset.ColorFormat.BC7;
+                    m_FormatSpecular = GaussianSplatAsset.ColorFormat.BC7;
                     m_FormatSH = GaussianSplatAsset.SHFormat.Cluster4k;
                     break;
                 case DataQuality.Low: // 14.01x smaller, 35.17 PSNR
                     m_FormatPos = GaussianSplatAsset.VectorFormat.Norm11;
+                    m_FormatNormal = GaussianSplatAsset.VectorFormat.Norm6;
                     m_FormatScale = GaussianSplatAsset.VectorFormat.Norm6;
                     m_FormatColor = GaussianSplatAsset.ColorFormat.Norm8x4;
+                    m_FormatSpecular = GaussianSplatAsset.ColorFormat.Norm8x4;
                     m_FormatSH = GaussianSplatAsset.SHFormat.Cluster16k;
                     break;
                 case DataQuality.Medium: // 5.14x smaller, 47.46 PSNR
                     m_FormatPos = GaussianSplatAsset.VectorFormat.Norm11;
+                    m_FormatNormal = GaussianSplatAsset.VectorFormat.Norm11;
                     m_FormatScale = GaussianSplatAsset.VectorFormat.Norm11;
                     m_FormatColor = GaussianSplatAsset.ColorFormat.Norm8x4;
+                    m_FormatSpecular = GaussianSplatAsset.ColorFormat.Norm8x4;
                     m_FormatSH = GaussianSplatAsset.SHFormat.Norm6;
                     break;
                 case DataQuality.High: // 2.94x smaller, 57.77 PSNR
                     m_FormatPos = GaussianSplatAsset.VectorFormat.Norm16;
+                    m_FormatNormal = GaussianSplatAsset.VectorFormat.Norm16;
                     m_FormatScale = GaussianSplatAsset.VectorFormat.Norm16;
                     m_FormatColor = GaussianSplatAsset.ColorFormat.Float16x4;
+                    m_FormatSpecular = GaussianSplatAsset.ColorFormat.Float16x4;
                     m_FormatSH = GaussianSplatAsset.SHFormat.Norm11;
                     break;
                 case DataQuality.VeryHigh: // 1.05x smaller
                     m_FormatPos = GaussianSplatAsset.VectorFormat.Float32;
+                    m_FormatNormal = GaussianSplatAsset.VectorFormat.Float32;
                     m_FormatScale = GaussianSplatAsset.VectorFormat.Float32;
                     m_FormatColor = GaussianSplatAsset.ColorFormat.Float32x4;
+                    m_FormatSpecular = GaussianSplatAsset.ColorFormat.Float32x4;
                     m_FormatSH = GaussianSplatAsset.SHFormat.Float32;
                     break;
                 default:
@@ -221,12 +244,15 @@ namespace GaussianSplatting.Editor
         public struct InputSplatData
         {
             public Vector3 pos;
-            public Vector3 nor;
+            public Vector3 nor1;
+            public Vector3 nor2;
             public Vector3 dc0;
             public Vector3 sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8, sh9, shA, shB, shC, shD, shE, shF;
             public float opacity;
             public Vector3 scale;
             public Quaternion rot;
+            public float roughness;
+            public Vector3 specular;
         }
 
         static T CreateOrReplaceAsset<T>(T asset, string path) where T : UnityEngine.Object
@@ -295,7 +321,7 @@ namespace GaussianSplatting.Editor
 
             EditorUtility.DisplayProgressBar(kProgressTitle, "Creating data objects", 0.7f);
             GaussianSplatAsset asset = ScriptableObject.CreateInstance<GaussianSplatAsset>();
-            asset.Initialize(inputSplats.Length, m_FormatPos, m_FormatScale, m_FormatColor, m_FormatSH, boundsMin, boundsMax, cameras);
+            asset.Initialize(inputSplats.Length, m_FormatPos, m_FormatNormal, m_FormatScale, m_FormatColor, m_FormatSpecular, m_FormatSH, boundsMin, boundsMax, cameras);
             asset.name = baseName;
 
             var dataHash = new Hash128((uint)asset.splatCount, (uint)asset.formatVersion, 0, 0);
@@ -303,16 +329,19 @@ namespace GaussianSplatting.Editor
             string pathPos = $"{m_OutputFolder}/{baseName}_pos.bytes";
             string pathOther = $"{m_OutputFolder}/{baseName}_oth.bytes";
             string pathCol = $"{m_OutputFolder}/{baseName}_col.bytes";
+            string pathSpec = $"{m_OutputFolder}/{baseName}_spec.bytes";
             string pathSh = $"{m_OutputFolder}/{baseName}_shs.bytes";
             LinearizeData(inputSplats);
 
             // if we are using full lossless (FP32) data, then do not use any chunking, and keep data as-is
             bool useChunks = isUsingChunks;
+            Debug.Log($"GS: using chunks: {useChunks}");
             if (useChunks)
                 CreateChunkData(inputSplats, pathChunk, ref dataHash);
             CreatePositionsData(inputSplats, pathPos, ref dataHash);
             CreateOtherData(inputSplats, pathOther, ref dataHash, splatSHIndices);
             CreateColorData(inputSplats, pathCol, ref dataHash);
+            CreateSpecularData(inputSplats, pathSpec, ref dataHash);
             CreateSHData(inputSplats, pathSh, ref dataHash, clusteredSHs);
             asset.SetDataHash(dataHash);
 
@@ -329,6 +358,7 @@ namespace GaussianSplatting.Editor
                 AssetDatabase.LoadAssetAtPath<TextAsset>(pathPos),
                 AssetDatabase.LoadAssetAtPath<TextAsset>(pathOther),
                 AssetDatabase.LoadAssetAtPath<TextAsset>(pathCol),
+                AssetDatabase.LoadAssetAtPath<TextAsset>(pathSpec),
                 AssetDatabase.LoadAssetAtPath<TextAsset>(pathSh));
 
             var assetPath = $"{m_OutputFolder}/{baseName}.asset";
@@ -380,7 +410,7 @@ namespace GaussianSplatting.Editor
         static unsafe void ReorderSHs(int splatCount, float* data)
         {
             int splatStride = UnsafeUtility.SizeOf<InputSplatData>() / 4;
-            int shStartOffset = 9, shCount = 15;
+            int shStartOffset = 12, shCount = 15;
             float* tmp = stackalloc float[shCount * 3];
             int idx = shStartOffset;
             for (int i = 0; i < splatCount; ++i)
@@ -476,7 +506,7 @@ namespace GaussianSplatting.Editor
         {
             for (int i = 0; i < splatCount; ++i)
             {
-                UnsafeUtility.MemCpy(shData, ((float*)splatData) + 9, 15 * 3 * sizeof(float));
+                UnsafeUtility.MemCpy(shData, ((float*)splatData) + 12, 15 * 3 * sizeof(float));
                 splatData++;
                 shData += 15 * 3;
             }
@@ -578,8 +608,12 @@ namespace GaussianSplatting.Editor
                 splat.scale = GaussianUtils.LinearScale(splat.scale);
 
                 // color
-                splat.dc0 = GaussianUtils.SH0ToColor(splat.dc0);
+                splat.dc0 = GaussianUtils.Sigmoid(splat.dc0 - Vector3.one * math.log(3.0f));
                 splat.opacity = GaussianUtils.Sigmoid(splat.opacity);
+
+                // specular
+                splat.specular = GaussianUtils.Sigmoid(splat.specular);
+                splat.roughness = GaussianUtils.Sigmoid(splat.roughness);
 
                 splatData[index] = splat;
             }
@@ -601,13 +635,19 @@ namespace GaussianSplatting.Editor
             public void Execute(int chunkIdx)
             {
                 float3 chunkMinpos = float.PositiveInfinity;
+                float3 chunkMinnor1 = float.PositiveInfinity;
+                float3 chunkMinnor2 = float.PositiveInfinity;
                 float3 chunkMinscl = float.PositiveInfinity;
                 float4 chunkMincol = float.PositiveInfinity;
                 float3 chunkMinshs = float.PositiveInfinity;
+                float4 chunkMinspec = float.PositiveInfinity;
                 float3 chunkMaxpos = float.NegativeInfinity;
+                float3 chunkMaxnor1 = float.NegativeInfinity;
+                float3 chunkMaxnor2 = float.NegativeInfinity;
                 float3 chunkMaxscl = float.NegativeInfinity;
                 float4 chunkMaxcol = float.NegativeInfinity;
                 float3 chunkMaxshs = float.NegativeInfinity;
+                float4 chunkMaxspec = float.NegativeInfinity;
 
                 int splatBegin = math.min(chunkIdx * GaussianSplatAsset.kChunkSize, splatData.Length);
                 int splatEnd = math.min((chunkIdx + 1) * GaussianSplatAsset.kChunkSize, splatData.Length);
@@ -624,6 +664,8 @@ namespace GaussianSplatting.Editor
                     splatData[i] = s;
 
                     chunkMinpos = math.min(chunkMinpos, s.pos);
+                    chunkMinnor1 = math.min(chunkMinnor1, s.nor1);
+                    chunkMinnor2 = math.min(chunkMinnor2, s.nor2);
                     chunkMinscl = math.min(chunkMinscl, s.scale);
                     chunkMincol = math.min(chunkMincol, new float4(s.dc0, s.opacity));
                     chunkMinshs = math.min(chunkMinshs, s.sh1);
@@ -641,8 +683,11 @@ namespace GaussianSplatting.Editor
                     chunkMinshs = math.min(chunkMinshs, s.shD);
                     chunkMinshs = math.min(chunkMinshs, s.shE);
                     chunkMinshs = math.min(chunkMinshs, s.shF);
+                    chunkMinspec = math.min(chunkMinspec, new float4(s.specular, s.roughness));
 
                     chunkMaxpos = math.max(chunkMaxpos, s.pos);
+                    chunkMaxnor1 = math.max(chunkMaxnor1, s.nor1);
+                    chunkMaxnor2 = math.max(chunkMaxnor2, s.nor2);
                     chunkMaxscl = math.max(chunkMaxscl, s.scale);
                     chunkMaxcol = math.max(chunkMaxcol, new float4(s.dc0, s.opacity));
                     chunkMaxshs = math.max(chunkMaxshs, s.sh1);
@@ -660,19 +705,29 @@ namespace GaussianSplatting.Editor
                     chunkMaxshs = math.max(chunkMaxshs, s.shD);
                     chunkMaxshs = math.max(chunkMaxshs, s.shE);
                     chunkMaxshs = math.max(chunkMaxshs, s.shF);
+                    chunkMaxspec = math.max(chunkMaxspec, new float4(s.specular, s.roughness));
                 }
 
                 // make sure bounds are not zero
                 chunkMaxpos = math.max(chunkMaxpos, chunkMinpos + 1.0e-5f);
+                chunkMaxnor1 = math.max(chunkMaxnor1, chunkMinnor1 + 1.0e-5f);
+                chunkMaxnor2 = math.max(chunkMaxnor2, chunkMinnor2 + 1.0e-5f);
                 chunkMaxscl = math.max(chunkMaxscl, chunkMinscl + 1.0e-5f);
                 chunkMaxcol = math.max(chunkMaxcol, chunkMincol + 1.0e-5f);
                 chunkMaxshs = math.max(chunkMaxshs, chunkMinshs + 1.0e-5f);
+                chunkMaxspec = math.max(chunkMaxspec, chunkMinspec + 1.0e-5f);
 
                 // store chunk info
                 GaussianSplatAsset.ChunkInfo info = default;
                 info.posX = new float2(chunkMinpos.x, chunkMaxpos.x);
                 info.posY = new float2(chunkMinpos.y, chunkMaxpos.y);
                 info.posZ = new float2(chunkMinpos.z, chunkMaxpos.z);
+                info.nor1X = math.f32tof16(chunkMinnor1.x) | (math.f32tof16(chunkMaxnor1.x) << 16);
+                info.nor1Y = math.f32tof16(chunkMinnor1.y) | (math.f32tof16(chunkMaxnor1.y) << 16);
+                info.nor1Z = math.f32tof16(chunkMinnor1.z) | (math.f32tof16(chunkMaxnor1.z) << 16);
+                info.nor2X = math.f32tof16(chunkMinnor2.x) | (math.f32tof16(chunkMaxnor2.x) << 16);
+                info.nor2Y = math.f32tof16(chunkMinnor2.y) | (math.f32tof16(chunkMaxnor2.y) << 16);
+                info.nor2Z = math.f32tof16(chunkMinnor2.z) | (math.f32tof16(chunkMaxnor2.z) << 16);
                 info.sclX = math.f32tof16(chunkMinscl.x) | (math.f32tof16(chunkMaxscl.x) << 16);
                 info.sclY = math.f32tof16(chunkMinscl.y) | (math.f32tof16(chunkMaxscl.y) << 16);
                 info.sclZ = math.f32tof16(chunkMinscl.z) | (math.f32tof16(chunkMaxscl.z) << 16);
@@ -683,6 +738,10 @@ namespace GaussianSplatting.Editor
                 info.shR = math.f32tof16(chunkMinshs.x) | (math.f32tof16(chunkMaxshs.x) << 16);
                 info.shG = math.f32tof16(chunkMinshs.y) | (math.f32tof16(chunkMaxshs.y) << 16);
                 info.shB = math.f32tof16(chunkMinshs.z) | (math.f32tof16(chunkMaxshs.z) << 16);
+                info.specR = math.f32tof16(chunkMinspec.x) | (math.f32tof16(chunkMaxspec.x) << 16);
+                info.specG = math.f32tof16(chunkMinspec.y) | (math.f32tof16(chunkMaxspec.y) << 16);
+                info.specB = math.f32tof16(chunkMinspec.z) | (math.f32tof16(chunkMaxspec.z) << 16);
+                info.specA = math.f32tof16(chunkMinspec.w) | (math.f32tof16(chunkMaxspec.w) << 16);
                 chunks[chunkIdx] = info;
 
                 // adjust data to be 0..1 within chunk bounds
@@ -690,6 +749,8 @@ namespace GaussianSplatting.Editor
                 {
                     InputSplatData s = splatData[i];
                     s.pos = ((float3)s.pos - chunkMinpos) / (chunkMaxpos - chunkMinpos);
+                    s.nor1 = ((float3)s.nor1 - chunkMinnor1) / (chunkMaxnor1 - chunkMinnor1);
+                    s.nor2 = ((float3)s.nor2 - chunkMinnor2) / (chunkMaxnor2 - chunkMinnor2);
                     s.scale = ((float3)s.scale - chunkMinscl) / (chunkMaxscl - chunkMinscl);
                     s.dc0 = ((float3)s.dc0 - chunkMincol.xyz) / (chunkMaxcol.xyz - chunkMincol.xyz);
                     s.opacity = (s.opacity - chunkMincol.w) / (chunkMaxcol.w - chunkMincol.w);
@@ -708,6 +769,8 @@ namespace GaussianSplatting.Editor
                     s.shD = ((float3) s.shD - chunkMinshs) / (chunkMaxshs - chunkMinshs);
                     s.shE = ((float3) s.shE - chunkMinshs) / (chunkMaxshs - chunkMinshs);
                     s.shF = ((float3) s.shF - chunkMinshs) / (chunkMaxshs - chunkMinshs);
+                    s.specular = ((float3) s.specular - chunkMinspec.xyz) / (chunkMaxspec.xyz - chunkMinspec.xyz);
+                    s.roughness = (s.roughness - chunkMinspec.w) / (chunkMaxspec.w - chunkMinspec.w);
                     splatData[i] = s;
                 }
             }
@@ -852,6 +915,7 @@ namespace GaussianSplatting.Editor
         {
             [ReadOnly] public NativeArray<InputSplatData> m_Input;
             [NativeDisableContainerSafetyRestriction] [ReadOnly] public NativeArray<int> m_SplatSHIndices;
+            public GaussianSplatAsset.VectorFormat m_NormalFormat;
             public GaussianSplatAsset.VectorFormat m_ScaleFormat;
             public int m_FormatSize;
             [NativeDisableParallelForRestriction] public NativeArray<byte> m_Output;
@@ -872,6 +936,12 @@ namespace GaussianSplatting.Editor
                 // scale: 6, 4 or 2 bytes
                 EmitEncodedVector(m_Input[index].scale, outputPtr, m_ScaleFormat);
                 outputPtr += GaussianSplatAsset.GetVectorSize(m_ScaleFormat);
+
+                // normal: 6, 4 or 2 bytes
+                EmitEncodedVector(m_Input[index].nor1, outputPtr, m_NormalFormat);
+                outputPtr += GaussianSplatAsset.GetVectorSize(m_NormalFormat);
+                EmitEncodedVector(m_Input[index].nor2, outputPtr, m_NormalFormat);
+                outputPtr += GaussianSplatAsset.GetVectorSize(m_NormalFormat);
 
                 // SH index
                 if (m_SplatSHIndices.IsCreated)
@@ -909,7 +979,7 @@ namespace GaussianSplatting.Editor
 
         void CreateOtherData(NativeArray<InputSplatData> inputSplats, string filePath, ref Hash128 dataHash, NativeArray<int> splatSHIndices)
         {
-            int formatSize = GaussianSplatAsset.GetOtherSizeNoSHIndex(m_FormatScale);
+            int formatSize = GaussianSplatAsset.GetOtherSizeNoSHIndex(m_FormatNormal, m_FormatScale);
             if (splatSHIndices.IsCreated)
                 formatSize += 2;
             int dataLen = inputSplats.Length * formatSize;
@@ -921,6 +991,7 @@ namespace GaussianSplatting.Editor
             {
                 m_Input = inputSplats,
                 m_SplatSHIndices = splatSHIndices,
+                m_NormalFormat = m_FormatNormal,
                 m_ScaleFormat = m_FormatScale,
                 m_FormatSize = formatSize,
                 m_Output = data
@@ -994,6 +1065,67 @@ namespace GaussianSplatting.Editor
                     height = height,
                     inputData = data,
                     format = m_FormatColor,
+                    outputData = new NativeArray<byte>(dstSize, Allocator.TempJob),
+                    formatBytesPerPixel = dstSize / width / height
+                };
+                jobConvert.Schedule(height, 1).Complete();
+                using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+                fs.Write(jobConvert.outputData);
+                jobConvert.outputData.Dispose();
+            }
+
+            data.Dispose();
+        }
+
+        [BurstCompile]
+        struct CreateSpecularDataJob : IJobParallelFor
+        {
+            [ReadOnly] public NativeArray<InputSplatData> m_Input;
+            [NativeDisableParallelForRestriction] public NativeArray<float4> m_Output;
+
+            public void Execute(int index)
+            {
+                var splat = m_Input[index];
+                int i = SplatIndexToTextureIndex((uint)index);
+                m_Output[i] = new float4(splat.specular.x, splat.specular.y, splat.specular.z, splat.roughness);
+            }
+        }
+
+        void CreateSpecularData(NativeArray<InputSplatData> inputSplats, string filePath, ref Hash128 dataHash)
+        {
+            var (width, height) = GaussianSplatAsset.CalcTextureSize(inputSplats.Length);
+            NativeArray<float4> data = new(width * height, Allocator.TempJob);
+
+            CreateSpecularDataJob job = new CreateSpecularDataJob();
+            job.m_Input = inputSplats;
+            job.m_Output = data;
+            job.Schedule(inputSplats.Length, 8192).Complete();
+
+            dataHash.Append(data);
+            dataHash.Append((int)m_FormatSpecular);
+
+            GraphicsFormat gfxFormat = GaussianSplatAsset.ColorFormatToGraphics(m_FormatSpecular);
+            int dstSize = (int)GraphicsFormatUtility.ComputeMipmapSize(width, height, gfxFormat);
+
+            if (GraphicsFormatUtility.IsCompressedFormat(gfxFormat))
+            {
+                Texture2D tex = new Texture2D(width, height, GraphicsFormat.R32G32B32A32_SFloat, TextureCreationFlags.DontInitializePixels | TextureCreationFlags.DontUploadUponCreate);
+                tex.SetPixelData(data, 0);
+                EditorUtility.CompressTexture(tex, GraphicsFormatUtility.GetTextureFormat(gfxFormat), 100);
+                NativeArray<byte> cmpData = tex.GetPixelData<byte>(0);
+                using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+                fs.Write(cmpData);
+
+                DestroyImmediate(tex);
+            }
+            else
+            {
+                ConvertColorJob jobConvert = new ConvertColorJob
+                {
+                    width = width,
+                    height = height,
+                    inputData = data,
+                    format = m_FormatSpecular,
                     outputData = new NativeArray<byte>(dstSize, Allocator.TempJob),
                     formatBytesPerPixel = dstSize / width / height
                 };

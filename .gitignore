@@ -2,6 +2,7 @@
 *.sln
 .DS_Store
 .idea
+.vscode
 
 /builds/*
 /images/*
@@ -24,3 +25,5 @@
 /projects/**/Temp/*
 /projects/**/UserSettings/*
 /projects/**/obj/*
+
+/projects/**/Assets/*

@@ -11,6 +11,11 @@ namespace GaussianSplatting.Runtime
             return math.rcp(1.0f + math.exp(-v));
         }
 
+        public static float3 Sigmoid(float3 v)
+        {
+            return math.rcp(1.0f + math.exp(-v));
+        }
+
         public static float3 SH0ToColor(float3 dc0)
         {
             const float kSH_C0 = 0.2820948f;

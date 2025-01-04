@@ -49,14 +49,16 @@ namespace GaussianSplatting.Editor
             long sizePos = gs.posData != null ? gs.posData.dataSize : 0;
             long sizeOther = gs.otherData != null ? gs.otherData.dataSize : 0;
             long sizeCol = gs.colorData != null ? gs.colorData.dataSize : 0;
+            long sizeSpec = gs.specularData != null ? gs.specularData.dataSize : 0;
             long sizeSH = GaussianSplatAsset.CalcSHDataSize(gs.splatCount, gs.shFormat);
             long sizeChunk = gs.chunkData != null ? gs.chunkData.dataSize : 0;
 
             EditorGUILayout.TextField("Memory", EditorUtility.FormatBytes(sizePos + sizeOther + sizeSH + sizeCol + sizeChunk));
             EditorGUI.indentLevel++;
             EditorGUILayout.TextField("Positions", $"{EditorUtility.FormatBytes(sizePos)}  ({gs.posFormat})");
-            EditorGUILayout.TextField("Other", $"{EditorUtility.FormatBytes(sizeOther)}  ({gs.scaleFormat})");
-            EditorGUILayout.TextField("Base color", $"{EditorUtility.FormatBytes(sizeCol)}  ({gs.colorFormat})");
+            EditorGUILayout.TextField("Other", $"{EditorUtility.FormatBytes(sizeOther)}  ({gs.normalFormat}, {gs.scaleFormat})");
+            EditorGUILayout.TextField("Base Color", $"{EditorUtility.FormatBytes(sizeCol)}  ({gs.colorFormat})");
+            EditorGUILayout.TextField("Specular Tint", $"{EditorUtility.FormatBytes(sizeSpec)}  ({gs.specularFormat})");
             EditorGUILayout.TextField("SHs", $"{EditorUtility.FormatBytes(sizeSH)}  ({gs.shFormat})");
             EditorGUILayout.TextField("Chunks",
                 $"{EditorUtility.FormatBytes(sizeChunk)}  ({UnsafeUtility.SizeOf<GaussianSplatAsset.ChunkInfo>()} B/chunk)");

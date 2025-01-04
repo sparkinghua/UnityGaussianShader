@@ -196,7 +196,10 @@ uint3 SplatIndexToPixelIndex(uint idx)
 struct SplatChunkInfo
 {
     uint colR, colG, colB, colA;
+    uint specR, specG, specB, specA;
     float2 posX, posY, posZ;
+    uint nor1X, nor1Y, nor1Z;
+    uint nor2X, nor2Y, nor2Z;
     uint sclX, sclY, sclZ;
     uint shR, shG, shB;
 };
@@ -209,9 +212,13 @@ static const uint kChunkSize = 256;
 struct SplatData
 {
     float3 pos;
+    float3 nor1;
+    float3 nor2;
     float4 rot;
     float3 scale;
     half opacity;
+    half3 specular;
+    half roughness;
     SplatSHData sh;
 };
 
@@ -314,6 +321,7 @@ SplatBufferDataType _SplatPos;
 SplatBufferDataType _SplatOther;
 SplatBufferDataType _SplatSH;
 Texture2D _SplatColor;
+Texture2D _SplatSpecular;
 uint _SplatFormat;
 
 // Match GaussianSplatAsset.VectorFormat
@@ -425,6 +433,11 @@ half4 LoadSplatColTex(uint3 coord)
     return _SplatColor.Load(coord);
 }
 
+half4 LoadSplatSpecTex(uint3 coord)
+{
+    return _SplatSpecular.Load(coord);
+}
+
 SplatData LoadSplatData(uint idx)
 {
     SplatData s = (SplatData)0;
@@ -432,18 +445,33 @@ SplatData LoadSplatData(uint idx)
     // figure out raw data offsets / locations
     uint3 coord = SplatIndexToPixelIndex(idx);
 
-    uint scaleFmt = (_SplatFormat >> 8) & 0xFF;
-    uint shFormat = (_SplatFormat >> 16) & 0xFF;
+    uint normalFmt = (_SplatFormat >> 8) & 0xFF;
+    uint scaleFmt = (_SplatFormat >> 16) & 0xFF;
+    uint shFormat = (_SplatFormat >> 24) & 0xFF;
+    
+    uint rotStride = 4; // rotation is 10.10.10.2
 
-    uint otherStride = 4; // rotation is 10.10.10.2
+    uint scaleStride = 0;
     if (scaleFmt == VECTOR_FMT_32F)
-        otherStride += 12;
+        scaleStride = 12;
     else if (scaleFmt == VECTOR_FMT_16)
-        otherStride += 6;
+        scaleStride = 6;
     else if (scaleFmt == VECTOR_FMT_11)
-        otherStride += 4;
+        scaleStride = 4;
     else if (scaleFmt == VECTOR_FMT_6)
-        otherStride += 2;
+        scaleStride = 2;
+
+    uint normalStride = 0;
+    if (normalFmt == VECTOR_FMT_32F)
+        normalStride = 12;
+    else if (normalFmt == VECTOR_FMT_16)
+        normalStride = 6;
+    else if (normalFmt == VECTOR_FMT_11)
+        normalStride = 4;
+    else if (normalFmt == VECTOR_FMT_6)
+        normalStride = 2;
+
+    uint otherStride = rotStride + scaleStride + 2 * normalStride;
     if (shFormat > VECTOR_FMT_6)
         otherStride += 2;
     uint otherAddr = idx * otherStride;
@@ -462,8 +490,11 @@ SplatData LoadSplatData(uint idx)
     // load raw splat data, which might be chunk-relative
     s.pos       = LoadSplatPosValue(idx);
     s.rot       = DecodeRotation(DecodePacked_10_10_10_2(LoadUInt(_SplatOther, otherAddr)));
-    s.scale     = LoadAndDecodeVector(_SplatOther, otherAddr + 4, scaleFmt);
+    s.scale     = LoadAndDecodeVector(_SplatOther, otherAddr + rotStride, scaleFmt);
+    s.nor1      = LoadAndDecodeVector(_SplatOther, otherAddr + rotStride + scaleStride, normalFmt);
+    s.nor2      = LoadAndDecodeVector(_SplatOther, otherAddr + rotStride + scaleStride + normalStride, normalFmt);
     half4 col   = LoadSplatColTex(coord);
+    half4 spec  = LoadSplatSpecTex(coord);
 
     uint shIndex = idx;
     if (shFormat > VECTOR_FMT_6)
@@ -568,19 +599,28 @@ SplatData LoadSplatData(uint idx)
         SplatChunkInfo chunk = _SplatChunks[chunkIdx];
         float3 posMin = float3(chunk.posX.x, chunk.posY.x, chunk.posZ.x);
         float3 posMax = float3(chunk.posX.y, chunk.posY.y, chunk.posZ.y);
+        half3 nor1Min = half3(f16tof32(chunk.nor1X    ), f16tof32(chunk.nor1Y    ), f16tof32(chunk.nor1Z    ));
+        half3 nor1Max = half3(f16tof32(chunk.nor1X>>16), f16tof32(chunk.nor1Y>>16), f16tof32(chunk.nor1Z>>16));
+        half3 nor2Min = half3(f16tof32(chunk.nor2X    ), f16tof32(chunk.nor2Y    ), f16tof32(chunk.nor2Z    ));
+        half3 nor2Max = half3(f16tof32(chunk.nor2X>>16), f16tof32(chunk.nor2Y>>16), f16tof32(chunk.nor2Z>>16));
         half3 sclMin = half3(f16tof32(chunk.sclX    ), f16tof32(chunk.sclY    ), f16tof32(chunk.sclZ    ));
         half3 sclMax = half3(f16tof32(chunk.sclX>>16), f16tof32(chunk.sclY>>16), f16tof32(chunk.sclZ>>16));
         half4 colMin = half4(f16tof32(chunk.colR    ), f16tof32(chunk.colG    ), f16tof32(chunk.colB    ), f16tof32(chunk.colA    ));
         half4 colMax = half4(f16tof32(chunk.colR>>16), f16tof32(chunk.colG>>16), f16tof32(chunk.colB>>16), f16tof32(chunk.colA>>16));
+        half4 specMin = half4(f16tof32(chunk.specR    ), f16tof32(chunk.specG    ), f16tof32(chunk.specB    ), f16tof32(chunk.specA    ));
+        half4 specMax = half4(f16tof32(chunk.specR>>16), f16tof32(chunk.specG>>16), f16tof32(chunk.specB>>16), f16tof32(chunk.specA>>16));
         half3 shMin = half3(f16tof32(chunk.shR    ), f16tof32(chunk.shG    ), f16tof32(chunk.shB    ));
         half3 shMax = half3(f16tof32(chunk.shR>>16), f16tof32(chunk.shG>>16), f16tof32(chunk.shB>>16));
         s.pos = lerp(posMin, posMax, s.pos);
+        s.nor1 = lerp(nor1Min, nor1Max, s.nor1);
+        s.nor2 = lerp(nor2Min, nor2Max, s.nor2);
         s.scale     = lerp(sclMin, sclMax, s.scale);
         s.scale *= s.scale;
         s.scale *= s.scale;
         s.scale *= s.scale;
         col   = lerp(colMin, colMax, col);
         col.a = InvSquareCentered01(col.a);
+        spec  = lerp(specMin, specMax, spec);
 
         if (shFormat > VECTOR_FMT_32F && shFormat <= VECTOR_FMT_6)
         {
@@ -603,6 +643,8 @@ SplatData LoadSplatData(uint idx)
     }
     s.opacity   = col.a;
     s.sh.col    = col.rgb;
+    s.roughness = spec.a;
+    s.specular  = spec.rgb;
 
     return s;
 }
@@ -612,6 +654,9 @@ struct SplatViewData
     float4 pos;
     float2 axis1, axis2;
     uint2 color; // 4xFP16
+    uint2 spec; // 4xFP16
+    float3 normal;
+    float3 viewdir;
 };
 
 #endif // GAUSSIAN_SPLATTING_HLSL

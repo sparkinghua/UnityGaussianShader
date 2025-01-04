@@ -186,6 +186,51 @@ bool IsSplatCut(float3 pos)
     return finalCut;
 }
 
+float3x3 BuildRotation(float4 q)
+{
+    float x = q.x;
+    float y = q.y;
+    float z = q.z;
+    float w = q.w;
+    float3x3 R = float3x3(
+        1-2*(y*y + z*z),   2*(x*y - w*z),   2*(x*z + w*y),
+          2*(x*y + w*z), 1-2*(x*x + z*z),   2*(y*z - w*x),
+          2*(x*z - w*y),   2*(y*z + w*x), 1-2*(x*x + y*y)
+    );
+
+    return R;
+}
+
+float3 FlipAlignView(float3 normal, float3 viewdir, out bool nonFlip)
+{
+    float dotprod = dot(normal, viewdir);
+
+    nonFlip = (dotprod >= 0.0);
+
+    float sign = nonFlip ? 1.0 : -1.0;
+    float3 normalFlipped = normal * sign;
+
+    return normalFlipped;
+}
+
+float3 GetMinimumAxis(float3 scale, float4 rotation)
+{
+    float3x3 R = BuildRotation(rotation);
+
+    // 0 -> X, 1 -> Y, 2 -> Z
+    int idx = 0;
+    float minVal = scale.x;
+    if (scale.y < minVal) { minVal = scale.y; idx = 1; }
+    if (scale.z < minVal) { minVal = scale.z; idx = 2; }
+
+    float3 axis;
+    axis.x = R[0][idx];
+    axis.y = R[1][idx];
+    axis.z = R[2][idx];
+
+    return normalize(axis);
+}
+
 [numthreads(GROUP_SIZE,1,1)]
 void CSCalcViewData (uint3 id : SV_DispatchThreadID)
 {
@@ -241,8 +286,25 @@ void CSCalcViewData (uint3 id : SV_DispatchThreadID)
         float3 objViewDir = mul((float3x3)_MatrixWorldToObject, worldViewDir);
         objViewDir = normalize(objViewDir);
 
+        // get normal
+        float3 normal_axis = GetMinimumAxis(splat.scale, splat.rot);
+        bool nonFlip;
+        normal_axis = FlipAlignView(normal_axis, objViewDir, nonFlip);
+        float3 deltaNormal = nonFlip ? splat.nor1 : splat.nor2;
+        float3 normal = normalize(normal_axis + deltaNormal);
+        
+        view.normal = normalize(mul(transpose(_MatrixWorldToObject), float4(normal, 0)).xyz);
+        view.viewdir = normalize(worldViewDir);
+
+        half4 spec;
+        spec.rgb = splat.specular;
+        spec.a = splat.roughness;
+        view.spec.x = (f32tof16(spec.r) << 16) | f32tof16(spec.g);
+        view.spec.y = (f32tof16(spec.b) << 16) | f32tof16(spec.a);
+
         half4 col;
         col.rgb = ShadeSH(splat.sh, objViewDir, _SHOrder, _SHOnly != 0);
+        // col.rgb = 0.5 + 0.5 * normal_axis;
         col.a = min(splat.opacity * opacityScale, 65000);
         view.color.x = (f32tof16(col.r) << 16) | f32tof16(col.g);
         view.color.y = (f32tof16(col.b) << 16) | f32tof16(col.a);
@@ -522,7 +584,8 @@ void CSScaleSelection (uint3 id : SV_DispatchThreadID)
 struct ExportSplatData
 {
     float3 pos;
-    float3 nor;
+    float3 nor1;
+    float3 nor2;
     float3 dc0;
     float4 shR14; float4 shR58; float4 shR9C; float3 shRDF;
     float4 shG14; float4 shG58; float4 shG9C; float3 shGDF;
@@ -530,6 +593,8 @@ struct ExportSplatData
     float opacity;
     float3 scale;
     float4 rot;
+    float  roughness;
+    float3 specular;
 };
 RWStructuredBuffer<ExportSplatData> _ExportBuffer;
 
@@ -540,6 +605,10 @@ float3 ColorToSH0(float3 col)
 float InvSigmoid(float v)
 {
     return log(v / max(1 - v, 1.0e-6));
+}
+float3 InvSigmoid(float3 v)
+{
+    return float3(InvSigmoid(v.x), InvSigmoid(v.y), InvSigmoid(v.z));
 }
 
 // SH rotation
@@ -636,6 +705,8 @@ void CSExportData (uint3 id : SV_DispatchThreadID)
             src.rot.xy = -src.rot.xy;
         src.rot = QuatMul(_ExportTransformRotation, src.rot);
         src.scale *= abs(_ExportTransformScale);
+        src.nor1 = mul(_MatrixObjectToWorld, float4(src.nor1,0)).xyz;
+        src.nor2 = mul(_MatrixObjectToWorld, float4(src.nor2,0)).xyz;
 
         float3x3 shRot = CalcSHRotMatrix(_MatrixObjectToWorld);
         RotateSH(src.sh, shRot);
@@ -643,7 +714,8 @@ void CSExportData (uint3 id : SV_DispatchThreadID)
 
     ExportSplatData dst;
     dst.pos = src.pos;
-    dst.nor = 0;
+    dst.nor1 = src.nor1;
+    dst.nor2 = src.nor2;
     dst.dc0 = ColorToSH0(src.sh.col);
     
     dst.shR14 = float4(src.sh.sh1.r, src.sh.sh2.r, src.sh.sh3.r, src.sh.sh4.r);
@@ -664,9 +736,8 @@ void CSExportData (uint3 id : SV_DispatchThreadID)
     dst.opacity = InvSigmoid(src.opacity);
     dst.scale = log(src.scale);
     dst.rot = src.rot.wxyz;
-
-    if (isCut)
-        dst.nor = 1; // mark as skipped for export
+    dst.roughness = InvSigmoid(src.roughness);
+    dst.specular = InvSigmoid(src.specular);
     
     _ExportBuffer[idx] = dst;
 }
@@ -676,6 +747,7 @@ RWByteAddressBuffer _CopyDstOther;
 RWByteAddressBuffer _CopyDstSH;
 RWByteAddressBuffer _CopyDstEditDeleted;
 RWTexture2D<float4> _CopyDstColor;
+RWTexture2D<float4> _CopyDstSpecular;
 uint _CopyDstSize, _CopySrcStartIndex, _CopyDstStartIndex, _CopyCount;
 
 float4x4 _CopyTransformMatrix;
@@ -706,6 +778,8 @@ void CSCopySplats (uint3 id : SV_DispatchThreadID)
         src.rot.xy = -src.rot.xy;
     src.rot = QuatMul(_CopyTransformRotation, src.rot);
     src.scale *= abs(_CopyTransformScale);
+    src.nor1 = mul(_CopyTransformMatrix, float4(src.nor1,0)).xyz;
+    src.nor2 = mul(_CopyTransformMatrix, float4(src.nor2,0)).xyz;
 
     float3x3 shRot = CalcSHRotMatrix(_CopyTransformMatrix);
     RotateSH(src.sh, shRot);
@@ -714,17 +788,20 @@ void CSCopySplats (uint3 id : SV_DispatchThreadID)
     // pos
     uint posStride = 12;
     _CopyDstPos.Store3(dstIdx * posStride, asuint(src.pos));
-    // rot + scale
-    uint otherStride = 4 + 12;
+    // rot + scale + nor1 + nor2
+    uint otherStride = 4 + 12 + 2*12;
     uint rotVal = EncodeQuatToNorm10(PackSmallest3Rotation(src.rot));
     _CopyDstOther.Store4(dstIdx * otherStride, uint4(
         rotVal,
         asuint(src.scale.x),
         asuint(src.scale.y),
         asuint(src.scale.z)));
+    _CopyDstOther.Store3(dstIdx * otherStride + 16, asuint(src.nor1));
+    _CopyDstOther.Store3(dstIdx * otherStride + 16 + 12, asuint(src.nor2));
     // color
     uint3 pixelIndex = SplatIndexToPixelIndex(dstIdx);
     _CopyDstColor[pixelIndex.xy] = float4(src.sh.col, src.opacity);
+    _CopyDstSpecular[pixelIndex.xy] = float4(src.specular, src.roughness);
 
     // SH
     uint shStride = 192; // 15*3 fp32, rounded up to multiple of 16
